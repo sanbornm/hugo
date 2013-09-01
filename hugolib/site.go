@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/spf13/hugo/target"
 	"github.com/spf13/nitro"
 	"html/template"
 	"io/ioutil"
@@ -35,11 +36,11 @@ type Site struct {
 	Tmpl        *template.Template
 	Indexes     IndexList
 	Files       []string
-	Directories []string
 	Sections    Index
 	Info        SiteInfo
 	Shortcodes  map[string]ShortcodeFunc
 	timer       *nitro.B
+	Target      target.Publisher
 }
 
 type SiteInfo struct {
@@ -107,13 +108,9 @@ func (site *Site) Render() (err error) {
 	if err = site.RenderIndexes(); err != nil {
 		return
 	}
-	if err = site.RenderIndexesIndexes(); err != nil {
-		return
-	}
+	site.RenderIndexesIndexes()
 	site.timerStep("render and write indexes")
-	if err = site.RenderLists(); err != nil {
-		return
-	}
+	site.RenderLists()
 	site.timerStep("render and write lists")
 	if err = site.RenderPages(); err != nil {
 		return
@@ -121,7 +118,7 @@ func (site *Site) Render() (err error) {
 	site.timerStep("render pages")
 	if err = site.RenderHomePage(); err != nil {
 		return
-        }
+	}
 	site.timerStep("render and write homepage")
 	return
 }
@@ -203,7 +200,7 @@ func (s *Site) initialize() {
 
 	s.checkDirectories()
 
-	staticDir := s.Config.GetAbsPath(s.Config.StaticDir+"/")
+	staticDir := s.Config.GetAbsPath(s.Config.StaticDir + "/")
 
 	walker := func(path string, fi os.FileInfo, err error) error {
 		if err != nil {
@@ -212,10 +209,9 @@ func (s *Site) initialize() {
 		}
 
 		if fi.IsDir() {
-			if (path == staticDir) {
+			if path == staticDir {
 				return filepath.SkipDir
 			}
-			site.Directories = append(site.Directories, path)
 			return nil
 		} else {
 			if ignoreDotFile(path) {
@@ -432,7 +428,7 @@ func inStringArray(arr []string, el string) bool {
 func (s *Site) RenderAliases() error {
 	for i, p := range s.Pages {
 		for _, a := range p.Aliases {
-			t := "alias";
+			t := "alias"
 			if strings.HasSuffix(a, ".xhtml") {
 				t = "alias-xhtml"
 			}
@@ -443,7 +439,10 @@ func (s *Site) RenderAliases() error {
 			if err != nil {
 				return err
 			}
-			s.WritePublic(a, content.Bytes())
+			err = s.WritePublic(a, content.Bytes())
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -460,10 +459,14 @@ func (s *Site) RenderPages() error {
 	return nil
 }
 
-func (s *Site) WritePages() {
+func (s *Site) WritePages() (err error) {
 	for _, p := range s.Pages {
-		s.WritePublic(p.OutFile, p.RenderedContent.Bytes())
+		err = s.WritePublic(p.OutFile, p.RenderedContent.Bytes())
+		if err != nil {
+			return
+		}
 	}
+	return
 }
 
 func (s *Site) RenderIndexes() error {
@@ -497,7 +500,10 @@ func (s *Site) RenderIndexes() error {
 				base = plural + "/" + k + "/" + "index"
 			}
 
-			s.WritePublic(base+".html", x.Bytes())
+			err = s.WritePublic(base+".html", x.Bytes())
+			if err != nil {
+				return err
+			}
 
 			if a := s.Tmpl.Lookup("rss.xml"); a != nil {
 				// XML Feed
@@ -509,7 +515,10 @@ func (s *Site) RenderIndexes() error {
 				}
 				n.Permalink = template.HTML(string(n.Site.BaseUrl) + n.Url)
 				s.Tmpl.ExecuteTemplate(y, "rss.xml", n)
-				s.WritePublic(base+".xml", y.Bytes())
+				err = s.WritePublic(base+".xml", y.Bytes())
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -531,8 +540,14 @@ func (s *Site) RenderIndexesIndexes() (err error) {
 			n.Data["OrderedIndex"] = s.Info.Indexes[plural]
 
 			x, err := s.RenderThing(n, layout)
-			s.WritePublic(plural+"/index.html", x.Bytes())
-			return err
+			if err != nil {
+				return err
+			}
+
+			err = s.WritePublic(plural+"/index.html", x.Bytes())
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return
@@ -553,7 +568,10 @@ func (s *Site) RenderLists() error {
 		if err != nil {
 			return err
 		}
-		s.WritePublic(section+"/index.html", content.Bytes())
+		err = s.WritePublic(section+"/index.html", content.Bytes())
+		if err != nil {
+			return err
+		}
 
 		if a := s.Tmpl.Lookup("rss.xml"); a != nil {
 			// XML Feed
@@ -565,7 +583,8 @@ func (s *Site) RenderLists() error {
 			n.Permalink = template.HTML(string(n.Site.BaseUrl) + n.Url)
 			y := s.NewXMLBuffer()
 			s.Tmpl.ExecuteTemplate(y, "rss.xml", n)
-			s.WritePublic(section+"/index.xml", y.Bytes())
+			err = s.WritePublic(section+"/index.xml", y.Bytes())
+			return err
 		}
 	}
 	return nil
@@ -589,7 +608,10 @@ func (s *Site) RenderHomePage() error {
 	if err != nil {
 		return err
 	}
-	s.WritePublic("index.html", x.Bytes())
+	err = s.WritePublic("index.html", x.Bytes())
+	if err != nil {
+		return err
+	}
 
 	if a := s.Tmpl.Lookup("rss.xml"); a != nil {
 		// XML Feed
@@ -598,7 +620,8 @@ func (s *Site) RenderHomePage() error {
 		n.Permalink = template.HTML(string(n.Site.BaseUrl) + "index.xml")
 		y := s.NewXMLBuffer()
 		s.Tmpl.ExecuteTemplate(y, "rss.xml", n)
-		s.WritePublic("index.xml", y.Bytes())
+		err = s.WritePublic("index.xml", y.Bytes())
+		return err
 	}
 
 	if a := s.Tmpl.Lookup("404.html"); a != nil {
@@ -609,7 +632,8 @@ func (s *Site) RenderHomePage() error {
 		if err != nil {
 			return err
 		}
-		s.WritePublic("404.html", x.Bytes())
+		err = s.WritePublic("404.html", x.Bytes())
+		return err
 	}
 
 	return nil
@@ -632,7 +656,7 @@ func (s *Site) NewNode() Node {
 
 func (s *Site) RenderThing(d interface{}, layout string) (*bytes.Buffer, error) {
 	if s.Tmpl.Lookup(layout) == nil {
-		return nil, errors.New("Layout not found")
+		return nil, errors.New(fmt.Sprintf("Layout not found: %s", layout))
 	}
 	buffer := new(bytes.Buffer)
 	err := s.Tmpl.ExecuteTemplate(buffer, layout, d)
@@ -656,7 +680,11 @@ func (s *Site) NewXMLBuffer() *bytes.Buffer {
 	return bytes.NewBufferString(header)
 }
 
-func (s *Site) WritePublic(path string, content []byte) {
+func (s *Site) WritePublic(path string, content []byte) (err error) {
+
+	if s.Target != nil {
+		return s.Target.Publish(path, bytes.NewReader(content))
+	}
 
 	if s.Config.Verbose {
 		fmt.Println(path)
@@ -665,14 +693,14 @@ func (s *Site) WritePublic(path string, content []byte) {
 	path, filename := filepath.Split(path)
 
 	path = filepath.FromSlash(s.Config.GetAbsPath(filepath.Join(s.Config.PublishDir, path)))
-	err := mkdirIf(path)
-
+	err = mkdirIf(path)
 	if err != nil {
-		fmt.Println(err)
+		return
 	}
 
 	file, _ := os.Create(filepath.Join(path, filename))
 	defer file.Close()
 
-	file.Write(content)
+	_, err = file.Write(content)
+	return
 }
